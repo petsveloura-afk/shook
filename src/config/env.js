@@ -62,6 +62,16 @@ const env = {
   BROADCAST_DELAY_MS: int('BROADCAST_DELAY_MS', 45),
 };
 
+/**
+ * הגנה מפני פלייסהולדר "0" שנשאר בטעות ב-CHANNEL_ID / ADMIN_GROUP_ID.
+ * "0" הוא מחרוזת לא ריקה ולכן נחשב "מוגדר" בבדיקות רגילות (truthy),
+ * אבל אינו chat_id תקין בטלגרם — מתייחסים אליו כאילו לא הוגדר בכלל,
+ * כדי שהקוד ינסה לשלוח הודעות במקום להיכשל בשקט מול chat "0" שלא קיים.
+ */
+['CHANNEL_ID', 'ADMIN_GROUP_ID'].forEach((key) => {
+  if (env[key] === '0') env[key] = null;
+});
+
 /** בדיקת חובה – נזרקת שגיאה ברורה בעברית/אנגלית אם חסר משתנה קריטי. */
 const REQUIRED = ['BOT_TOKEN', 'SUPABASE_URL', 'SUPABASE_KEY'];
 
