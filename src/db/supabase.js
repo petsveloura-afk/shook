@@ -16,7 +16,7 @@ const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_KEY, {
 const LISTING_SELECT = `
   *,
   category:categories ( id, name_he, emoji, slug ),
-  seller:users ( id, telegram_id, full_name, username, phone_number, rating_sum, rating_count, status )
+  seller:users!listings_user_id_fkey ( id, telegram_id, full_name, username, phone_number, rating_sum, rating_count, status )
 `;
 
 /** מפרק תשובת Supabase וזורק שגיאה קריאה במקרה של כשל. */
