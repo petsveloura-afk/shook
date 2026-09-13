@@ -308,6 +308,7 @@ function adminPanelKeyboard() {
     [Markup.button.callback('🗂️ ניהול קטגוריות', 'a:cats')],
     [Markup.button.callback('🗑️ הסרת מודעה לפי מזהה', 'a:rm')],
     [Markup.button.callback('🚫 חסימה / שחרור משתמש', 'a:banmenu')],
+    [Markup.button.callback('🗂️ ערוצים וקבוצות', 'a:channels')],
   ]);
 }
 

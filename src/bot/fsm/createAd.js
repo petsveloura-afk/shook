@@ -13,6 +13,7 @@ const env = require('../../config/env');
 const db = require('../../db/supabase');
 const kb = require('../keyboards');
 const fmt = require('../formatters');
+const destinations = require('../../services/destinations');
 
 const LIMITS = {
   TITLE_MIN: 5,
@@ -30,8 +31,15 @@ function draftOf(ctx) {
   return ctx.session.draft;
 }
 
-function setState(ctx, state) {
+/**
+ * קובע את מצב האשף ומיד שומר את הסשן (persistSession, אם קיים).
+ * שמירה מיידית — ולא רק בסוף העדכון — מצמצמת חלון מרוץ מול עדכון נוסף שמגיע
+ * כמעט באותו רגע (למשל לחיצה כפולה בטעות), שבלעדיה עלול "לדרוס" את המצב
+ * שזה עתה השתנה ולגרום לאשף להיראות "תקוע".
+ */
+async function setState(ctx, state) {
   ctx.session.state = state;
+  if (typeof ctx.persistSession === 'function') await ctx.persistSession();
 }
 
 function clearWizard(ctx) {
@@ -62,7 +70,7 @@ async function askCategory(ctx) {
     clearWizard(ctx);
     return ctx.reply('⚠️ אין קטגוריות מוגדרות במערכת. פנה למנהל.', kb.mainMenu());
   }
-  setState(ctx, 'ad:CATEGORY');
+  await setState(ctx, 'ad:CATEGORY');
   return ctx.reply('1️⃣ <b>בחר קטגוריה למודעה:</b>', {
     parse_mode: 'HTML',
     ...kb.categoriesGrid(categories, 'cat:'),
@@ -70,7 +78,7 @@ async function askCategory(ctx) {
 }
 
 async function askTitle(ctx) {
-  setState(ctx, 'ad:TITLE');
+  await setState(ctx, 'ad:TITLE');
   return ctx.reply(
     `2️⃣ <b>מה שם המוצר?</b>\n\nכתוב כותרת קצרה וברורה (${LIMITS.TITLE_MIN}-${LIMITS.TITLE_MAX} תווים).\nלדוגמה: <i>אייפון 13 128GB שחור</i>`,
     { parse_mode: 'HTML', ...kb.cancelOnly() }
@@ -78,7 +86,7 @@ async function askTitle(ctx) {
 }
 
 async function askDescription(ctx) {
-  setState(ctx, 'ad:DESC');
+  await setState(ctx, 'ad:DESC');
   return ctx.reply(
     `3️⃣ <b>תיאור המוצר</b>\n\nספר על המוצר: מצב, אביזרים, סיבת המכירה וכו' (${LIMITS.DESC_MIN}-${LIMITS.DESC_MAX} תווים).`,
     { parse_mode: 'HTML', ...kb.cancelOnly() }
@@ -86,7 +94,7 @@ async function askDescription(ctx) {
 }
 
 async function askCondition(ctx) {
-  setState(ctx, 'ad:CONDITION');
+  await setState(ctx, 'ad:CONDITION');
   return ctx.reply('4️⃣ <b>מה מצב המוצר?</b>', {
     parse_mode: 'HTML',
     ...kb.conditionKeyboard(),
@@ -94,7 +102,7 @@ async function askCondition(ctx) {
 }
 
 async function askPrice(ctx) {
-  setState(ctx, 'ad:PRICE');
+  await setState(ctx, 'ad:PRICE');
   return ctx.reply(
     '5️⃣ <b>מה המחיר המבוקש?</b>\n\nכתוב מספר בשקלים (לדוגמה: <code>1500</code>)\nאו בחר אפשרות מהירה:',
     { parse_mode: 'HTML', ...kb.priceKeyboard() }
@@ -102,7 +110,7 @@ async function askPrice(ctx) {
 }
 
 async function askLocation(ctx) {
-  setState(ctx, 'ad:LOCATION');
+  await setState(ctx, 'ad:LOCATION');
   return ctx.reply('6️⃣ <b>מאיזה אזור המוצר?</b>', {
     parse_mode: 'HTML',
     ...kb.regionsKeyboard('loc:'),
@@ -111,7 +119,7 @@ async function askLocation(ctx) {
 
 async function askPhotos(ctx) {
   const draft = draftOf(ctx);
-  setState(ctx, 'ad:PHOTOS');
+  await setState(ctx, 'ad:PHOTOS');
   await ctx.reply(
     `7️⃣ <b>העלאת תמונות</b>\n\nשלח עד ${env.MAX_PHOTOS} תמונות (אפשר גם אלבום אחד עם כמה תמונות יחד).\nכשתסיים — לחץ על «${kb.DONE_PHOTOS}».`,
     { parse_mode: 'HTML', ...kb.photosKeyboard() }
@@ -124,10 +132,14 @@ async function askPhotos(ctx) {
 
 async function showPreview(ctx) {
   const draft = draftOf(ctx);
-  setState(ctx, 'ad:PREVIEW');
+  await setState(ctx, 'ad:PREVIEW');
 
   const name = await categoryName(draft.category_id);
   const text = fmt.previewCard(draft, { categoryName: name, photosCount: draft.photos.length });
+
+  // מסירים את המקלדת הקבועה ("✅ סיימתי להעלות תמונות") כדי שלא תישאר תקועה
+  // על המסך בזמן שהתצוגה המקדימה (עם כפתורים מוצמדים) מוצגת.
+  await ctx.reply('👁️ <b>תצוגה מקדימה של המודעה שלך</b>', { parse_mode: 'HTML', ...kb.removeKeyboard() });
 
   if (draft.photos.length === 1) {
     await ctx.replyWithPhoto(draft.photos[0]);
@@ -142,32 +154,50 @@ async function showPreview(ctx) {
 
 /* ------------------------- שליחה למודרציה ופרסום ------------------------- */
 
-/** שולח את המודעה לקבוצת האדמינים עם כפתורי אישור/דחייה. */
+/**
+ * שולח את המודעה לאישור מנהל, עם כפתורי אישור/דחייה.
+ * יעדים: קבוצות אישור מנהלים מוגדרות (ניהול ערוצים / ADMIN_GROUP_ID).
+ * אם אין אף יעד מוגדר — נופלים חזרה לשליחה פרטית לכל אחד מ-ADMIN_IDS,
+ * כדי שהמנהל תמיד יקבל את הבקשה, גם אם לא הוגדרה קבוצת אישור.
+ */
 async function sendToModeration(telegram, listing) {
-  if (!env.ADMIN_GROUP_ID) {
-    console.warn('[moderation] ADMIN_GROUP_ID is not set — skipping moderation message');
+  const groupIds = await destinations.getAdminGroupIds();
+  const targets = groupIds.length ? groupIds : env.ADMIN_IDS;
+
+  if (!targets.length) {
+    console.warn(
+      '[moderation] לא הוגדרה קבוצת אישור מנהלים ואין ADMIN_IDS — לא ניתן לשלוח בקשת אישור'
+    );
     return null;
   }
 
   const photos = listing.photos || [];
-  try {
-    if (photos.length === 1) {
-      await telegram.sendPhoto(env.ADMIN_GROUP_ID, photos[0]);
-    } else if (photos.length > 1) {
-      await telegram.sendMediaGroup(
-        env.ADMIN_GROUP_ID,
-        photos.map((fileId) => ({ type: 'photo', media: fileId }))
-      );
+  const keyboard = kb.moderationKeyboard(listing).reply_markup;
+  let sentAny = false;
+
+  for (const chatId of targets) {
+    try {
+      if (photos.length === 1) {
+        await telegram.sendPhoto(chatId, photos[0]);
+      } else if (photos.length > 1) {
+        await telegram.sendMediaGroup(
+          chatId,
+          photos.map((fileId) => ({ type: 'photo', media: fileId }))
+        );
+      }
+
+      await telegram.sendMessage(chatId, fmt.moderationCard(listing), {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: keyboard,
+      });
+      sentAny = true;
+    } catch (error) {
+      console.error(`[moderation] failed to notify ${chatId}:`, error.message);
     }
-  } catch (error) {
-    console.error('[moderation] failed to send photos:', error.message);
   }
 
-  return telegram.sendMessage(env.ADMIN_GROUP_ID, fmt.moderationCard(listing), {
-    parse_mode: 'HTML',
-    disable_web_page_preview: true,
-    reply_markup: kb.moderationKeyboard(listing).reply_markup,
-  });
+  return sentAny;
 }
 
 async function submit(ctx) {
@@ -193,6 +223,7 @@ async function submit(ctx) {
   });
 
   clearWizard(ctx);
+  if (typeof ctx.persistSession === 'function') await ctx.persistSession();
 
   await ctx.reply(
     [
@@ -317,7 +348,11 @@ async function onPhoto(ctx) {
   const best = sizes[sizes.length - 1];
   if (!best) return false;
 
-  if (!draft.photos.includes(best.file_id)) draft.photos.push(best.file_id);
+  if (!draft.photos.includes(best.file_id)) {
+    draft.photos.push(best.file_id);
+    // שמירה מיידית — כדי לא לאבד תמונות שהועלו אם עדכון נוסף מגיע מיד אחרי (אלבום).
+    if (typeof ctx.persistSession === 'function') await ctx.persistSession();
+  }
 
   const groupId = ctx.message.media_group_id || null;
   const sameAlbum = groupId && draft.lastMediaGroup === groupId;
@@ -384,7 +419,7 @@ function register(bot) {
     }
 
     draft.price_type = 'flexible';
-    ctx.session.state = 'ad:PRICE';
+    await setState(ctx, 'ad:PRICE');
     await ctx.editMessageText(
       '5️⃣ מחיר גמיש נבחר 🤝\nכתוב עכשיו את המחיר המבוקש כנקודת פתיחה (מספר בשקלים):',
       { parse_mode: 'HTML' }

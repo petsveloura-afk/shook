@@ -227,6 +227,7 @@ function adminPanel(lang) {
       Markup.button.callback(t('admin.export'), 'pa:exp'),
       Markup.button.callback('🚫 Words', 'pa:words'),
     ],
+    [Markup.button.callback('🗂️ ערוצים וקבוצות', 'a:channels')],
     [Markup.button.callback('🛡️ Classic panel', 'a:panel')],
   ]);
 }
