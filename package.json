@@ -1,0 +1,35 @@
+{
+  "name": "pashpashuk-marketplace-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pashpashuk - Telegram Marketplace Bot (Hebrew) | Telegraf + Supabase | Vercel Serverless / Hugging Face Spaces",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "set-webhook": "node scripts/setWebhook.js set",
+    "delete-webhook": "node scripts/setWebhook.js delete",
+    "webhook-info": "node scripts/setWebhook.js info",
+    "seed": "node scripts/seed.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "telegraf": "^4.16.3"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "marketplace",
+    "yad2",
+    "supabase",
+    "telegraf",
+    "hebrew"
+  ],
+  "license": "MIT"
+}
