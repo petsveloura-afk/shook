@@ -281,6 +281,10 @@ async function onMenuText(ctx) {
       return showSupport(ctx);
     case kb.CANCEL:
       return ctx.reply('↩️ חזרה לתפריט הראשי.', kb.mainMenu());
+    case kb.DONE_PHOTOS:
+      // כפתור "סיימתי להעלות תמונות" שנשאר תקוע על המסך מתהליך פרסום קודם/שהסתיים —
+      // לא מתפרש כחיפוש חופשי (שהיה גורם לשגיאה), אלא מציג את התפריט הראשי.
+      return ctx.reply('ℹ️ אין כרגע פרסום מודעה פעיל. אפשר להתחיל חדש מהתפריט ➕', kb.mainMenu());
     default:
       break;
   }

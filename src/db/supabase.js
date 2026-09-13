@@ -146,6 +146,77 @@ async function deleteSession(key) {
 }
 
 /* ============================================================================
+ *  BOT DESTINATIONS (ערוצי פרסום + קבוצות אישור מנהלים — ניתן לניהול מהבוט)
+ * ========================================================================== */
+
+/**
+ * מחזיר את כל היעדים מתפקיד מסוים ('channel' | 'admin_group').
+ * לא זורק אם הטבלה עוד לא קיימת (המיגרציה schema_channels.sql לא הורצה) —
+ * מחזיר [] כדי שהקוד הקורא יפול חזרה בשקט למשתני הסביבה.
+ */
+async function listDestinations(role) {
+  try {
+    return (
+      unwrap(
+        await supabase
+          .from('bot_destinations')
+          .select('*')
+          .eq('role', role)
+          .order('id', { ascending: true }),
+        'listDestinations'
+      ) || []
+    );
+  } catch (error) {
+    console.warn(
+      `[db] listDestinations('${role}') unavailable — הרץ את schema_channels.sql? (${error.message})`
+    );
+    return [];
+  }
+}
+
+/** כל היעדים המוגדרים (לתצוגה בפאנל הניהול). */
+async function listAllDestinations() {
+  try {
+    return (
+      unwrap(
+        await supabase
+          .from('bot_destinations')
+          .select('*')
+          .order('role', { ascending: true })
+          .order('id', { ascending: true }),
+        'listAllDestinations'
+      ) || []
+    );
+  } catch (error) {
+    console.warn('[db] listAllDestinations unavailable:', error.message);
+    return [];
+  }
+}
+
+/** מוסיף/מעדכן יעד (ערוץ או קבוצת אישור) לפי chat_id + role. */
+async function upsertDestination({ chat_id, chat_title, chat_type, role, added_by }) {
+  return unwrap(
+    await supabase
+      .from('bot_destinations')
+      .upsert(
+        { chat_id, chat_title: chat_title || null, chat_type: chat_type || null, role, added_by: added_by || null },
+        { onConflict: 'chat_id,role' }
+      )
+      .select('*')
+      .maybeSingle(),
+    'upsertDestination'
+  );
+}
+
+async function removeDestination(chatId, role) {
+  unwrap(
+    await supabase.from('bot_destinations').delete().eq('chat_id', chatId).eq('role', role),
+    'removeDestination'
+  );
+  return true;
+}
+
+/* ============================================================================
  *  CATEGORIES
  * ========================================================================== */
 
@@ -213,6 +284,27 @@ async function updateListing(id, patch) {
     await supabase.from('listings').update(patch).eq('id', id).select(LISTING_SELECT).maybeSingle(),
     'updateListing'
   );
+}
+
+/**
+ * כמו updateListing, אבל סובלני לעמודות חדשות שטרם נוצרו ב-DB (למשל channel_posts
+ * לפני הרצת schema_channels.sql): במקרה של שגיאת "undefined_column" (42703),
+ * מנסה שוב בלי השדה שאינו קיים, כדי לא להפיל את כל תהליך הפרסום/עדכון.
+ */
+async function updateListingTolerant(id, patch, optionalKeys = []) {
+  try {
+    return await updateListing(id, patch);
+  } catch (error) {
+    if (error && error.code === '42703' && optionalKeys.length) {
+      const fallbackPatch = { ...patch };
+      optionalKeys.forEach((key) => delete fallbackPatch[key]);
+      console.warn(
+        `[db] updateListing: עמודה חסרה (${error.message}) — נשמר בלי ${optionalKeys.join(', ')}. הרץ מיגרציה עדכנית.`
+      );
+      return updateListing(id, fallbackPatch);
+    }
+    throw error;
+  }
 }
 
 async function incrementListingCounter(id, field) {
@@ -471,6 +563,12 @@ module.exports = {
   saveSession,
   deleteSession,
 
+  // bot destinations (channels / admin groups)
+  listDestinations,
+  listAllDestinations,
+  upsertDestination,
+  removeDestination,
+
   // categories
   listCategories,
   getCategory,
@@ -481,6 +579,7 @@ module.exports = {
   createListing,
   getListing,
   updateListing,
+  updateListingTolerant,
   incrementViews,
   incrementContacts,
   searchListings,

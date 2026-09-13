@@ -13,6 +13,7 @@ const db = require('../db/supabase');
 const kb = require('./keyboards');
 const userHandlers = require('./handlers/user');
 const adminHandlers = require('./handlers/admin');
+const channelsHandlers = require('./handlers/channels'); // ניהול ערוצים/קבוצות שהבוט מחובר אליהם
 const createAd = require('./fsm/createAd');
 const pro = require('./pro'); // שכבת השדרוג: ריבוי שפות, גלישה, התראות, אנליטיקס
 
@@ -31,6 +32,21 @@ async function sessionMiddleware(ctx, next) {
   }
 
   ctx.session = initial;
+
+  /**
+   * שמירה מיידית של הסשן (מעבר מצב באשף, שמירת תמונה וכו').
+   * מצמצם חלון מרוץ מול עדכון נוסף שמגיע מיד אחרי (לחיצה כפולה, אלבום תמונות),
+   * שבלעדיו עלול "לדרוס" בטעות מצב שהתעדכן זה עתה ולגרום לאשף להיתקע.
+   */
+  ctx.persistSession = async () => {
+    try {
+      if (!ctx.session || Object.keys(ctx.session).length === 0) await db.deleteSession(key);
+      else await db.saveSession(key, ctx.session);
+    } catch (error) {
+      console.error('[session] immediate save failed:', error.message);
+    }
+  };
+
   const before = JSON.stringify(initial);
 
   await next();
@@ -123,7 +139,11 @@ function buildBot() {
   // סדר הרישום חשוב: פקודות ו-callbacks לפני הראוטר הכללי.
   userHandlers.register(bot);
   adminHandlers.register(bot);
+  channelsHandlers.register(bot);
   createAd.register(bot);
+
+  // זיהוי אוטומטי: הבוט התווסף/הוסר כאדמין מערוץ או קבוצה
+  bot.on('my_chat_member', channelsHandlers.onMyChatMember);
 
   // מסכי ה-PRO (גלישה, שפות, התראות, מרכז בקרה) — אחרי הקיימים, לפני ראוטר הטקסט
   pro.register(bot);
