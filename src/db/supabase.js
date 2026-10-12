@@ -129,15 +129,15 @@ async function getSession(key) {
   return row ? row.value || {} : {};
 }
 
+/** שמירת סשן — בלי .select() כדי לא להחזיר נתונים מיותרים (כתיבה מהירה יותר). */
 async function saveSession(key, value) {
-  return unwrap(
+  unwrap(
     await supabase
       .from('sessions')
-      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-      .select('key')
-      .maybeSingle(),
+      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' }),
     'saveSession'
   );
+  return true;
 }
 
 async function deleteSession(key) {
