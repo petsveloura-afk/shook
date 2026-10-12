@@ -27,13 +27,76 @@ async function guard(ctx) {
   return false;
 }
 
-/** קישור ישיר לפוסט בערוץ (עובד גם לערוץ פרטי דרך /c/). */
-function postLink(listing) {
-  if (!listing.channel_message_id || !env.CHANNEL_ID) return null;
-  const id = String(env.CHANNEL_ID);
-  if (id.startsWith('@')) return `https://t.me/${id.slice(1)}/${listing.channel_message_id}`;
-  if (id.startsWith('-100')) return `https://t.me/c/${id.slice(4)}/${listing.channel_message_id}`;
+/** שמות משתמש של ערוצים שכבר נשלפו מטלגרם (cache בזיכרון). */
+const usernameCache = new Map();
+
+/** מאתר את הפוסט הראשי של המודעה (ערוץ + מזהה הודעה לקישור). */
+function primaryPost(listing) {
+  const posts = Array.isArray(listing.channel_posts) ? listing.channel_posts : [];
+  if (posts.length && posts[0] && posts[0].chat_id && posts[0].message_id) {
+    const post = posts[0];
+    // באלבום עם caption הפוסט האמיתי הוא התמונה הראשונה.
+    const messageId =
+      post.caption_album && post.media_message_ids && post.media_message_ids.length
+        ? post.media_message_ids[0]
+        : post.message_id;
+    return { chatId: post.chat_id, messageId };
+  }
+  if (listing.channel_message_id && env.CHANNEL_ID) {
+    return { chatId: env.CHANNEL_ID, messageId: listing.channel_message_id };
+  }
   return null;
+}
+
+/** בונה קישור מ-username (ציבורי) או מ-ID מספרי (פרטי — עובד רק לחברי הערוץ). */
+function buildLink(chatId, messageId, username) {
+  if (username) return `https://t.me/${username}/${messageId}`;
+  const id = String(chatId);
+  if (id.startsWith('@')) return `https://t.me/${id.slice(1)}/${messageId}`;
+  if (id.startsWith('-100')) {
+    if (env.CHANNEL_USERNAME && String(env.CHANNEL_ID) === id) {
+      return `https://t.me/${env.CHANNEL_USERNAME}/${messageId}`;
+    }
+    return `https://t.me/c/${id.slice(4)}/${messageId}`;
+  }
+  return null;
+}
+
+/** קישור ישיר לפוסט בערוץ (סינכרוני; עובד לערוץ ציבורי עם username, ולערוץ פרטי דרך /c/). */
+function postLink(listing) {
+  const post = primaryPost(listing);
+  if (!post) return null;
+  return buildLink(post.chatId, post.messageId, null);
+}
+
+/**
+ * קישור ישיר לפוסט — גרסה אסינכרונית ומדויקת:
+ * שולפת את ה-username האמיתי של הערוץ מטלגרם, כך שגם כש-CHANNEL_ID מספרי
+ * מתקבל קישור ציבורי שעובד לכולם (ולא "משתמש לא קיים").
+ */
+async function resolvePostLink(telegram, listing) {
+  const post = primaryPost(listing);
+  if (!post) return null;
+
+  const key = String(post.chatId);
+  let username = usernameCache.get(key);
+
+  if (username === undefined) {
+    username = null;
+    if (key.startsWith('@')) {
+      username = key.slice(1);
+    } else {
+      try {
+        const chat = await telegram.getChat(post.chatId);
+        if (chat && chat.username) username = chat.username;
+      } catch (error) {
+        console.warn(`[admin] getChat ${key} failed: ${error.message}`);
+      }
+    }
+    usernameCache.set(key, username);
+  }
+
+  return buildLink(post.chatId, post.messageId, username);
 }
 
 function adminName(ctx) {
@@ -473,7 +536,14 @@ function register(bot) {
 
     await stampModeration(ctx, published, `🟢 <b>אושר ופורסם</b> על ידי ${fmt.esc(adminName(ctx))}`);
 
-    const link = postLink(published);
+    let link = null;
+    try {
+      link = await resolvePostLink(ctx.telegram, published);
+    } catch (error) {
+      console.warn('[admin] resolvePostLink failed:', error.message);
+      link = postLink(published);
+    }
+
     await notifyUser(
       ctx.telegram,
       published.seller && published.seller.telegram_id,
@@ -597,4 +667,5 @@ module.exports = {
   showQueue,
   isAdmin,
   postLink,
+  resolvePostLink,
 };
