@@ -11,17 +11,24 @@ const fmt = require('./formatters');
 const kb = require('./keyboards');
 const destinations = require('../services/destinations');
 
+/** מגבלת טלגרם ל-caption של מדיה. */
+const CAPTION_LIMIT = 1024;
+
 /** האם הפוסט בערוץ נשלח כתמונה בודדת עם caption. */
 function isSinglePhotoPost(listing) {
   const photos = listing.photos || [];
   return photos.length === 1;
 }
 
-/** מפרסם מודעה בצ'אט (ערוץ) בודד. מחזיר {chat_id, message_id, media_message_ids} או null בכשל. */
+/**
+ * מפרסם מודעה בצ'אט (ערוץ) בודד.
+ * מחזיר {chat_id, message_id, media_message_ids, caption_album} או null בכשל.
+ */
 async function publishToChat(telegram, chatId, listing, { text, keyboard, photos }) {
   try {
     let mainMessageId = null;
     let mediaMessageIds = [];
+    let captionAlbum = false;
 
     if (photos.length === 1) {
       const message = await telegram.sendPhoto(chatId, photos[0], {
@@ -31,18 +38,32 @@ async function publishToChat(telegram, chatId, listing, { text, keyboard, photos
       });
       mainMessageId = message.message_id;
     } else if (photos.length > 1) {
+      // הטקסט נכנס כ-caption של התמונה הראשונה — כך האלבום והפוסט הם הודעה אחת.
+      // אם הטקסט ארוך ממגבלת ה-caption, חוזרים להתנהגות הישנה (הטקסט בהודעה נפרדת).
+      captionAlbum = text.length <= CAPTION_LIMIT;
+
       const album = await telegram.sendMediaGroup(
         chatId,
-        photos.slice(0, env.MAX_PHOTOS).map((fileId) => ({ type: 'photo', media: fileId }))
+        photos.slice(0, env.MAX_PHOTOS).map((fileId, index) => ({
+          type: 'photo',
+          media: fileId,
+          ...(captionAlbum && index === 0 ? { caption: text, parse_mode: 'HTML' } : {}),
+        }))
       );
       mediaMessageIds = album.map((message) => message.message_id);
-      const message = await telegram.sendMessage(chatId, text, {
-        parse_mode: 'HTML',
-        reply_markup: keyboard.reply_markup,
-        reply_to_message_id: mediaMessageIds[0],
-        allow_sending_without_reply: true,
-        disable_web_page_preview: true,
-      });
+
+      // אי אפשר לצרף כפתורים לאלבום — לכן הם נשלחים בהודעה קצרה מתחתיו.
+      const message = await telegram.sendMessage(
+        chatId,
+        captionAlbum ? '👇 לפעולות על המודעה' : text,
+        {
+          parse_mode: 'HTML',
+          reply_markup: keyboard.reply_markup,
+          reply_to_message_id: mediaMessageIds[0],
+          allow_sending_without_reply: true,
+          disable_web_page_preview: true,
+        }
+      );
       mainMessageId = message.message_id;
     } else {
       const message = await telegram.sendMessage(chatId, text, {
@@ -53,7 +74,12 @@ async function publishToChat(telegram, chatId, listing, { text, keyboard, photos
       mainMessageId = message.message_id;
     }
 
-    return { chat_id: chatId, message_id: mainMessageId, media_message_ids: mediaMessageIds };
+    return {
+      chat_id: chatId,
+      message_id: mainMessageId,
+      media_message_ids: mediaMessageIds,
+      caption_album: captionAlbum,
+    };
   } catch (error) {
     console.error(`[publish] publish to ${chatId} failed:`, error.message);
     return null;
@@ -63,7 +89,7 @@ async function publishToChat(telegram, chatId, listing, { text, keyboard, photos
 /**
  * מפרסם מודעה בכל ערוצי הפרסום המוגדרים (ניהול ערוצים בפאנל, עם נפילה ל-CHANNEL_ID).
  * 1 תמונה  -> sendPhoto עם caption + כפתורים.
- * 2+ תמונות -> sendMediaGroup (אלבום) + הודעת טקסט עם הכפתורים.
+ * 2+ תמונות -> sendMediaGroup (אלבום עם caption) + הודעה קצרה עם הכפתורים.
  * 0 תמונות -> הודעת טקסט בלבד.
  */
 async function publishListing(telegram, listingId) {
@@ -132,6 +158,15 @@ async function markSoldInChannel(telegram, listing) {
     try {
       if (isSinglePhotoPost(listing)) {
         await telegram.editMessageCaption(post.chat_id, post.message_id, undefined, text, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } else if (post.caption_album && post.media_message_ids && post.media_message_ids.length) {
+        // הטקסט נמצא ב-caption של התמונה הראשונה באלבום, והכפתורים בהודעה הקצרה שמתחתיו.
+        await telegram.editMessageCaption(post.chat_id, post.media_message_ids[0], undefined, text, {
+          parse_mode: 'HTML',
+        });
+        await telegram.editMessageText(post.chat_id, post.message_id, undefined, '🔴 נמכר', {
           parse_mode: 'HTML',
           reply_markup: keyboard,
         });
