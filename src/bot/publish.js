@@ -22,63 +22,38 @@ function isSinglePhotoPost(listing) {
 
 /**
  * מפרסם מודעה בצ'אט (ערוץ) בודד.
- * מחזיר {chat_id, message_id, media_message_ids, caption_album} או null בכשל.
+ * כל פוסט הוא הודעה אחת, והכפתורים מחוברים אליה ישירות:
+ *  - יש תמונה (אחת או יותר) -> sendPhoto עם התמונה הראשונה + caption + כפתורים.
+ *  - אין תמונות, או שהטקסט ארוך ממגבלת ה-caption -> הודעת טקסט + כפתורים.
+ * מחזיר {chat_id, message_id, media_message_ids, caption_album, kind} או null בכשל.
  */
 async function publishToChat(telegram, chatId, listing, { text, keyboard, photos }) {
   try {
-    let mainMessageId = null;
-    let mediaMessageIds = [];
-    let captionAlbum = false;
+    let message;
+    let kind;
 
-    if (photos.length === 1) {
-      const message = await telegram.sendPhoto(chatId, photos[0], {
+    if (photos.length >= 1 && text.length <= CAPTION_LIMIT) {
+      message = await telegram.sendPhoto(chatId, photos[0], {
         caption: text,
         parse_mode: 'HTML',
         reply_markup: keyboard.reply_markup,
       });
-      mainMessageId = message.message_id;
-    } else if (photos.length > 1) {
-      // הטקסט נכנס כ-caption של התמונה הראשונה — כך האלבום והפוסט הם הודעה אחת.
-      // אם הטקסט ארוך ממגבלת ה-caption, חוזרים להתנהגות הישנה (הטקסט בהודעה נפרדת).
-      captionAlbum = text.length <= CAPTION_LIMIT;
-
-      const album = await telegram.sendMediaGroup(
-        chatId,
-        photos.slice(0, env.MAX_PHOTOS).map((fileId, index) => ({
-          type: 'photo',
-          media: fileId,
-          ...(captionAlbum && index === 0 ? { caption: text, parse_mode: 'HTML' } : {}),
-        }))
-      );
-      mediaMessageIds = album.map((message) => message.message_id);
-
-      // אי אפשר לצרף כפתורים לאלבום — לכן הם נשלחים בהודעה קצרה מתחתיו.
-      const message = await telegram.sendMessage(
-        chatId,
-        captionAlbum ? '👇 לפעולות על המודעה' : text,
-        {
-          parse_mode: 'HTML',
-          reply_markup: keyboard.reply_markup,
-          reply_to_message_id: mediaMessageIds[0],
-          allow_sending_without_reply: true,
-          disable_web_page_preview: true,
-        }
-      );
-      mainMessageId = message.message_id;
+      kind = 'photo';
     } else {
-      const message = await telegram.sendMessage(chatId, text, {
+      message = await telegram.sendMessage(chatId, text, {
         parse_mode: 'HTML',
         reply_markup: keyboard.reply_markup,
         disable_web_page_preview: true,
       });
-      mainMessageId = message.message_id;
+      kind = 'text';
     }
 
     return {
       chat_id: chatId,
-      message_id: mainMessageId,
-      media_message_ids: mediaMessageIds,
-      caption_album: captionAlbum,
+      message_id: message.message_id,
+      media_message_ids: [],
+      caption_album: false,
+      kind,
     };
   } catch (error) {
     console.error(`[publish] publish to ${chatId} failed:`, error.message);
@@ -88,9 +63,8 @@ async function publishToChat(telegram, chatId, listing, { text, keyboard, photos
 
 /**
  * מפרסם מודעה בכל ערוצי הפרסום המוגדרים (ניהול ערוצים בפאנל, עם נפילה ל-CHANNEL_ID).
- * 1 תמונה  -> sendPhoto עם caption + כפתורים.
- * 2+ תמונות -> sendMediaGroup (אלבום עם caption) + הודעה קצרה עם הכפתורים.
- * 0 תמונות -> הודעת טקסט בלבד.
+ * יש תמונה -> sendPhoto עם caption + כפתורים באותה הודעה.
+ * 0 תמונות -> הודעת טקסט עם כפתורים.
  */
 async function publishListing(telegram, listingId) {
   const listing = await db.getListing(listingId);
@@ -104,8 +78,8 @@ async function publishListing(telegram, listingId) {
   const approvedAt = listing.approved_at || new Date().toISOString();
   const enriched = { ...listing, approved_at: approvedAt };
   const text = fmt.channelPost(enriched);
-  const keyboard = kb.channelKeyboard(listing.id);
   const photos = listing.photos || [];
+  const keyboard = kb.channelKeyboard(listing.id, photos.length);
 
   const posts = [];
   for (const chatId of channelIds) {
@@ -156,17 +130,32 @@ async function markSoldInChannel(telegram, listing) {
   for (const post of posts) {
     if (!post.chat_id || !post.message_id) continue;
     try {
-      if (isSinglePhotoPost(listing)) {
+      const hasAlbum = post.media_message_ids && post.media_message_ids.length > 0;
+
+      if (post.kind === 'photo') {
+        // פוסט חדש: תמונה אחת עם caption וכפתורים באותה הודעה.
         await telegram.editMessageCaption(post.chat_id, post.message_id, undefined, text, {
           parse_mode: 'HTML',
           reply_markup: keyboard,
         });
-      } else if (post.caption_album && post.media_message_ids && post.media_message_ids.length) {
-        // הטקסט נמצא ב-caption של התמונה הראשונה באלבום, והכפתורים בהודעה הקצרה שמתחתיו.
+      } else if (post.kind === 'text') {
+        await telegram.editMessageText(post.chat_id, post.message_id, undefined, text, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+          disable_web_page_preview: true,
+        });
+      } else if (hasAlbum && post.caption_album) {
+        // תאימות לאחור: פוסטים ישנים שפורסמו כאלבום + הודעת כפתורים נפרדת.
         await telegram.editMessageCaption(post.chat_id, post.media_message_ids[0], undefined, text, {
           parse_mode: 'HTML',
         });
         await telegram.editMessageText(post.chat_id, post.message_id, undefined, '🔴 נמכר', {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } else if (isSinglePhotoPost(listing) && !hasAlbum) {
+        // תאימות לאחור: פוסטים ישנים של תמונה בודדת.
+        await telegram.editMessageCaption(post.chat_id, post.message_id, undefined, text, {
           parse_mode: 'HTML',
           reply_markup: keyboard,
         });
