@@ -19,11 +19,25 @@ const pro = require('./pro'); // שכבת השדרוג: ריבוי שפות, ג�
 
 /* ------------------------------ Middlewares ------------------------------ */
 
-/** סשן מתמיד ב-Postgres — עובד גם ב-Serverless (Vercel) וגם ב-Polling. */
+/**
+ * סשן מתמיד ב-Postgres — עובד גם ב-Serverless (Vercel) וגם ב-Polling.
+ *
+ * אופטימיזציית מהירות: רישום/עדכון המשתמש (upsertUser) מתחיל כאן במקביל
+ * לטעינת הסשן, ו-identifyMiddleware רק ממתין לתוצאה. כך שתי הקריאות ל-DB
+ * רצות יחד ולא בזו אחר זו.
+ */
 async function sessionMiddleware(ctx, next) {
   if (!ctx.from) return next();
 
   const key = `u:${ctx.from.id}`;
+
+  // התחלת רישום המשתמש במקביל (בלי לחכות לו כאן)
+  if (!ctx.from.is_bot) {
+    const userPromise = db.upsertUser(ctx.from);
+    userPromise.catch(() => {}); // מונע unhandled rejection; השגיאה נתפסת ב-identifyMiddleware
+    ctx.state.userPromise = userPromise;
+  }
+
   let initial = {};
   try {
     initial = (await db.getSession(key)) || {};
@@ -33,33 +47,33 @@ async function sessionMiddleware(ctx, next) {
 
   ctx.session = initial;
 
+  // הצילום האחרון שנשמר ב-DB — כדי לא לכתוב שוב סשן שלא השתנה.
+  let lastSaved = JSON.stringify(initial);
+
   /**
    * שמירה מיידית של הסשן (מעבר מצב באשף, שמירת תמונה וכו').
    * מצמצם חלון מרוץ מול עדכון נוסף שמגיע מיד אחרי (לחיצה כפולה, אלבום תמונות),
    * שבלעדיו עלול "לדרוס" בטעות מצב שהתעדכן זה עתה ולגרום לאשף להיתקע.
+   * אם הסשן לא השתנה מאז השמירה האחרונה — לא כותבים כלום.
    */
   ctx.persistSession = async () => {
     try {
+      const snapshot = JSON.stringify(ctx.session || {});
+      if (snapshot === lastSaved) return;
+
       if (!ctx.session || Object.keys(ctx.session).length === 0) await db.deleteSession(key);
       else await db.saveSession(key, ctx.session);
+
+      lastSaved = snapshot;
     } catch (error) {
-      console.error('[session] immediate save failed:', error.message);
+      console.error('[session] save failed:', error.message);
     }
   };
 
-  const before = JSON.stringify(initial);
-
   await next();
 
-  const after = JSON.stringify(ctx.session || {});
-  if (after === before) return undefined;
-
-  try {
-    if (!ctx.session || Object.keys(ctx.session).length === 0) await db.deleteSession(key);
-    else await db.saveSession(key, ctx.session);
-  } catch (error) {
-    console.error('[session] save failed:', error.message);
-  }
+  // שמירה אחרונה בסוף העדכון (רק אם משהו השתנה מאז השמירה האחרונה)
+  await ctx.persistSession();
   return undefined;
 }
 
@@ -68,7 +82,8 @@ async function identifyMiddleware(ctx, next) {
   if (!ctx.from || ctx.from.is_bot) return next();
 
   try {
-    ctx.state.dbUser = await db.upsertUser(ctx.from);
+    // ה-upsert כבר התחיל ב-sessionMiddleware; אם לא (מסיבה כלשהי) מבצעים אותו כאן.
+    ctx.state.dbUser = await (ctx.state.userPromise || db.upsertUser(ctx.from));
   } catch (error) {
     console.error('[identify] upsert failed:', error.message);
     return next();
