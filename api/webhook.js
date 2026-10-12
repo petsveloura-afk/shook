@@ -17,8 +17,34 @@ const bot = getBot();
 
 let initPromise = null;
 
+/**
+ * בונה botInfo מקומית (בלי קריאת רשת ל-getMe) כשידוע BOT_USERNAME.
+ * ה-id של הבוט הוא החלק הראשון של הטוקן. חוסך זמן ב-cold start.
+ */
+function seedBotInfo() {
+  if (bot.botInfo) return true;
+  if (!env.BOT_USERNAME) return false;
+
+  const id = Number(String(env.BOT_TOKEN || '').split(':')[0]);
+  if (!Number.isFinite(id) || id <= 0) return false;
+
+  bot.botInfo = {
+    id,
+    is_bot: true,
+    first_name: env.BOT_USERNAME,
+    username: env.BOT_USERNAME,
+    can_join_groups: true,
+    can_read_all_group_messages: false,
+    supports_inline_queries: false,
+  };
+  return true;
+}
+
 /** אתחול חד-פעמי (botInfo נדרש לזיהוי פקודות בקבוצות). */
 function ensureInit() {
+  if (bot.botInfo) return Promise.resolve(bot.botInfo);
+  if (seedBotInfo()) return Promise.resolve(bot.botInfo);
+
   if (!initPromise) {
     initPromise = (async () => {
       const me = await bot.telegram.getMe();
