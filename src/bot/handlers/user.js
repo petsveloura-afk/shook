@@ -261,6 +261,34 @@ async function showContact(ctx, listingId) {
   return true;
 }
 
+/** שולח את כל תמונות המודעה כאלבום, ומתחתיו כפתורי פעולה. */
+async function showPhotos(ctx, listingId) {
+  const listing = await db.getListing(listingId);
+  if (!listing || ['deleted', 'rejected'].includes(listing.status)) {
+    return ctx.reply('⚠️ המודעה לא נמצאה או שהוסרה.', kb.mainMenu());
+  }
+
+  const photos = (listing.photos || []).slice(0, env.MAX_PHOTOS);
+  if (photos.length > 1) {
+    await ctx.replyWithMediaGroup(
+      photos.map((fileId, index) => ({
+        type: 'photo',
+        media: fileId,
+        ...(index === 0
+          ? { caption: `🛍️ ${fmt.esc(listing.title)}\n🆔 ${fmt.adId(listing.id)}`, parse_mode: 'HTML' }
+          : {}),
+      }))
+    );
+  } else if (photos.length === 1) {
+    await ctx.replyWithPhoto(photos[0]);
+  }
+
+  const isFav = await db.isFavorite(ctx.state.dbUser.id, listing.id);
+  return ctx.reply('👇 פעולות על המודעה', {
+    ...kb.resultCardKeyboard(listing, { page: 0, total: 1, isFav }),
+  });
+}
+
 /* ------------------------------ ראוטר טקסט ------------------------------ */
 
 async function onMenuText(ctx) {
@@ -373,6 +401,7 @@ function register(bot) {
     if (payload) {
       const favMatch = payload.match(/^fav_(\d+)$/);
       const contactMatch = payload.match(/^contact_(\d+)$/);
+      const photosMatch = payload.match(/^photos_(\d+)$/);
       const adMatch = payload.match(/^ad_(\d+)$/);
       const rateMatch = payload.match(/^rate_(\d+)$/);
 
@@ -389,6 +418,7 @@ function register(bot) {
       }
 
       if (contactMatch) return showContact(ctx, Number(contactMatch[1]));
+      if (photosMatch) return showPhotos(ctx, Number(photosMatch[1]));
 
       if (adMatch) {
         const listing = await db.getListing(Number(adMatch[1]));
