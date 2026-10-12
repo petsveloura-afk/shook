@@ -153,14 +153,22 @@ function editFieldsKeyboard() {
 /* --------------------------------- ערוץ --------------------------------- */
 
 /** כפתורי הפוסט בערוץ — Deep Links (עובדים תמיד, גם ללא הרשאות callback בערוץ). */
-function channelKeyboard(listingId) {
-  return Markup.inlineKeyboard([
+function channelKeyboard(listingId, photoCount = 0) {
+  const rows = [
     [
       Markup.button.url('📩 צור קשר עם המוכר', env.botLink(`contact_${listingId}`)),
       Markup.button.url('⭐️ שמור במועדפים', env.botLink(`fav_${listingId}`)),
     ],
-    [Markup.button.url('🤖 לפרסום מודעה דרך הבוט', env.botLink('publish'))],
-  ]);
+  ];
+
+  if (photoCount > 1) {
+    rows.push([
+      Markup.button.url(`📷 לצפייה בכל התמונות (${photoCount})`, env.botLink(`photos_${listingId}`)),
+    ]);
+  }
+
+  rows.push([Markup.button.url('🤖 לפרסום מודעה דרך הבוט', env.botLink('publish'))]);
+  return Markup.inlineKeyboard(rows);
 }
 
 /* ------------------------------ תפריט חיפוש ------------------------------ */
