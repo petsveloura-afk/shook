@@ -33,12 +33,30 @@ function list(name) {
     .filter(Boolean);
 }
 
+/**
+ * שם משתמש ציבורי של הערוץ (בלי @ ובלי https://t.me/).
+ * קודם מ-CHANNEL_USERNAME; אם לא הוגדר — מנסים לחלץ מ-CHANNEL_URL
+ * (רק קישור מהצורה t.me/name, לא קישור הזמנה פרטי כמו t.me/+abc).
+ */
+function channelUsername() {
+  const explicit = (str('CHANNEL_USERNAME', '') || '')
+    .replace(/^https?:\/\/t\.me\//i, '')
+    .replace(/^@/, '')
+    .replace(/\/.*$/, '');
+  if (explicit) return explicit;
+
+  const url = str('CHANNEL_URL', '') || '';
+  const match = url.match(/^https?:\/\/t\.me\/([A-Za-z][A-Za-z0-9_]{3,})\/?$/i);
+  return match ? match[1] : '';
+}
+
 const env = {
   // Telegram
   BOT_TOKEN: str('BOT_TOKEN'),
   BOT_USERNAME: (str('BOT_USERNAME', '') || '').replace(/^@/, ''),
   CHANNEL_ID: str('CHANNEL_ID'),
   CHANNEL_URL: str('CHANNEL_URL', ''),
+  CHANNEL_USERNAME: channelUsername(),
   ADMIN_GROUP_ID: str('ADMIN_GROUP_ID'),
   ADMIN_IDS: list('ADMIN_IDS').map((id) => String(id)),
   SUPPORT_USERNAME: (str('SUPPORT_USERNAME', '') || '').replace(/^@/, ''),
