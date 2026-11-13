@@ -16,6 +16,7 @@ const adminHandlers = require('./handlers/admin');
 const channelsHandlers = require('./handlers/channels'); // ניהול ערוצים/קבוצות שהבוט מחובר אליהם
 const createAd = require('./fsm/createAd');
 const pro = require('./pro'); // שכבת השדרוג: ריבוי שפות, גלישה, התראות, אנליטיקס
+const ultra = require('./ultra'); // ULTRA: מרכז בית מעוצב, כלים חכמים, חיפוש חכם, בדיקת תקינות
 
 /* ------------------------------ Middlewares ------------------------------ */
 
@@ -163,6 +164,9 @@ function buildBot() {
   // מסכי ה-PRO (גלישה, שפות, התראות, מרכז בקרה) — אחרי הקיימים, לפני ראוטר הטקסט
   pro.register(bot);
 
+  // ULTRA — נרשם אחרי PRO ולפני ראוטר הטקסט הכללי (החיפוש החכם מדלג על כל זרימה פעילה)
+  ultra.register(bot);
+
   bot.on('text', textRouter);
   bot.on('photo', photoRouter);
 
@@ -212,6 +216,13 @@ const COMMANDS = [
   { command: 'dashboard', description: '📊 הסטטיסטיקה שלי' },
   { command: 'settings', description: '⚙️ הגדרות' },
   { command: 'language', description: '🌐 Language / שפה / اللغة' },
+  // --- ULTRA ---
+  { command: 'hub', description: '🏠 מרכז הבית' },
+  { command: 'tools', description: '🧰 כלים חכמים' },
+  { command: 'price', description: '💰 יועץ מחירים' },
+  { command: 'score', description: '📈 ציון איכות למודעה' },
+  { command: 'guide', description: '📖 מדריך מהיר' },
+  { command: 'tips', description: '💡 טיפים' },
 ];
 
 async function registerCommands(bot) {

@@ -79,10 +79,18 @@ async function home(ctx) {
   const lang = langOf(ctx);
   const name = fmt.esc(ctx.from.first_name || '');
 
-  return ctx.reply(
+  const welcome = await ctx.reply(
     [t('welcome.title', { name }), '', t('welcome.body'), '', t('welcome.tip')].join('\n'),
     { parse_mode: 'HTML', ...kbp.mainMenu(lang) }
   );
+
+  // ULTRA: מרכז בית מעוצב מתחת להודעה הקיימת. אם משהו נכשל — המסך המקורי כבר נשלח.
+  try {
+    await require('../ultra').renderHub(ctx);
+  } catch (error) {
+    console.warn('[ultra] hub render failed:', error.message);
+  }
+  return welcome;
 }
 
 async function showSettings(ctx, { edit = false } = {}) {
